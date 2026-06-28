@@ -27,7 +27,12 @@ async function saveToSheets(email: string, industries: string, companies: string
 }
 
 async function generateBrief(industries: string, companies: string): Promise<string> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const client = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    defaultHeaders: {
+      "anthropic-beta": "web-search-2025-03-05",
+    },
+  });
 
   const today = new Date().toLocaleDateString("ko-KR", {
     year: "numeric",
@@ -53,26 +58,29 @@ async function generateBrief(industries: string, companies: string): Promise<str
 5. 각 기사: 제목 / 부제 / 내용(5~7문장) 형식
 6. 마지막에 Closing Note: 핵심 안건 1~2개 요약 + PE 투자회사 입장의 점검 포인트
 
-아래 HTML 형식으로 작성하세요 (이메일로 전송됩니다):
-
-전체를 완전한 HTML 문서로 작성해주세요. 다음 스타일 가이드를 따르세요:
+완전한 HTML 문서로 작성하세요 (이메일로 전송됩니다). 스타일 가이드:
 - 전체 배경: #0B1120
-- 컨테이너: max-width 680px, margin auto, padding 40px
-- 브리핑 타이틀: 흰색, 36px, bold, 중앙 정렬
-- 날짜/발행 정보: #6B7280, 14px, 중앙 정렬
-- Executive Summary 박스: #1a2540 배경, #4F6EF7 왼쪽 4px border, padding 20px, border-radius 12px
-- 섹션 구분선: #1F2937
-- 기사 제목: #4F6EF7, 20px, bold
-- 기사 부제: #9CA3AF, 14px, italic
-- 기사 본문: #D1D5DB, 15px, line-height 1.7
-- 투자 시사점: #1e3a5f 배경, #4F6EF7 왼쪽 3px border, padding 12px 16px, #93C5FD 텍스트
-- Closing Note 박스: #111827 배경, #7C5CFC 왼쪽 4px border, padding 24px, border-radius 12px
-- 하단 푸터: Kainalyst 로고, #374151 텍스트`;
+- 컨테이너: max-width 680px, margin auto, padding 40px, font-family: -apple-system, Arial, sans-serif
+- 브리핑 타이틀: 흰색, 32px, bold, 중앙 정렬
+- 날짜: #6B7280, 14px, 중앙 정렬
+- Executive Summary 박스: #1a2540 배경, #4F6EF7 왼쪽 4px border, padding 20px, border-radius 12px, 흰색 텍스트
+- 각 기사 구분선: border-top 1px solid #1F2937, padding-top 24px
+- 기사 제목: #4F6EF7, 18px, bold
+- 기사 부제: #9CA3AF, 13px, italic, margin-bottom 8px
+- 기사 본문: #D1D5DB, 14px, line-height 1.8
+- 투자 시사점: #1e3a5f 배경, #4F6EF7 왼쪽 3px solid border, padding 10px 14px, #93C5FD 텍스트, border-radius 6px, margin-top 10px
+- Closing Note 박스: #111827 배경, #7C5CFC 왼쪽 4px border, padding 24px, border-radius 12px, 흰색 텍스트
+- 푸터: Kainalyst, #374151, 12px, 중앙 정렬, margin-top 40px`;
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 8000,
-    tools: [{ type: "web_search_20250305" as "web_search_20250305", name: "web_search" }],
+    tools: [
+      {
+        type: "web_search_20250305" as "web_search_20250305",
+        name: "web_search",
+      },
+    ],
     messages: [{ role: "user", content: prompt }],
   });
 
@@ -89,7 +97,7 @@ async function sendEmail(to: string, htmlContent: string) {
     service: "gmail",
     auth: {
       user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_APP_PASSWORD,
+      pass: process.env.GMAIL_APP_PASSWORD?.replace(/\s/g, ""),
     },
   });
 
@@ -108,21 +116,35 @@ async function sendEmail(to: string, htmlContent: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const { email, industries, companies } = await req.json();
+
+  // Step 1: Google Sheets 저장
   try {
-    const { email, industries, companies } = await req.json();
-
-    // 1. Google Sheets 저장
     await saveToSheets(email, industries, companies);
-
-    // 2. AI 브리핑 생성
-    const briefHtml = await generateBrief(industries, companies);
-
-    // 3. 이메일 발송
-    await sendEmail(email, briefHtml);
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ success: false }, { status: 500 });
+    console.log("✅ Sheets 저장 완료");
+  } catch (err) {
+    console.error("❌ Sheets 저장 실패:", err);
+    return NextResponse.json({ success: false, step: "sheets" }, { status: 500 });
   }
+
+  // Step 2: AI 브리핑 생성
+  let briefHtml = "";
+  try {
+    briefHtml = await generateBrief(industries, companies);
+    console.log("✅ 브리핑 생성 완료, 길이:", briefHtml.length);
+  } catch (err) {
+    console.error("❌ 브리핑 생성 실패:", err);
+    return NextResponse.json({ success: false, step: "brief" }, { status: 500 });
+  }
+
+  // Step 3: 이메일 발송
+  try {
+    await sendEmail(email, briefHtml);
+    console.log("✅ 이메일 발송 완료 →", email);
+  } catch (err) {
+    console.error("❌ 이메일 발송 실패:", err);
+    return NextResponse.json({ success: false, step: "email" }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true });
 }
