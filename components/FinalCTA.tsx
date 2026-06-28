@@ -30,10 +30,18 @@ export default function FinalCTA() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, industries, companies }),
       });
-      if (!res.ok) throw new Error();
+      const data = await res.json();
+      if (!res.ok) {
+        const stepMsg: Record<string, string> = {
+          sheets: "데이터 저장 중 오류가 발생했습니다.",
+          brief: "브리핑 생성 중 오류가 발생했습니다.",
+          email: "이메일 발송 중 오류가 발생했습니다.",
+        };
+        throw new Error(stepMsg[data.step] ?? "오류가 발생했습니다.");
+      }
       setStep("done");
-    } catch {
-      setError("오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
     } finally {
       setLoading(false);
     }
